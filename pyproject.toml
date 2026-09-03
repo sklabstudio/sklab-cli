@@ -1,0 +1,79 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sklab-cli"
+version = "0.1.0"
+description = "Developer workflows, project starters, diagnostics, and release checks from SKLab Studio."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "SKLab Studio", email = "hello@sklab.cc" }]
+keywords = ["cli", "developer-tools", "starters", "diagnostics", "release"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development",
+  "Topic :: Utilities",
+]
+dependencies = [
+  "typer>=0.9.0",
+  "rich>=13.0.0",
+  "httpx>=0.27.0",
+  "platformdirs>=4.0.0",
+  "pydantic>=2.0.0",
+]
+
+[project.scripts]
+sklab = "sklab.cli:app"
+
+[project.urls]
+Homepage = "https://sklab.cc"
+Repository = "https://github.com/sklabstudio/sklab-cli"
+Issues = "https://github.com/sklabstudio/sklab-cli/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sklab"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "C4"]
+ignore = [
+  # typer.Option() in argument defaults is the documented Typer idiom.
+  "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S603", "S607", "S105", "E501", "B904"]
+# The vetted subprocess boundary: argv arrays only, shell=False, timeouts.
+"src/sklab/core/subprocess.py" = ["S603"]
+"src/sklab/core/clipboard.py" = ["S603", "S607"]
+# Enum member named PASS trips the hardcoded-password heuristic.
+"src/sklab/diagnostics/models.py" = ["S105"]
+"src/sklab/release/models.py" = ["S105"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sklab"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+ignore_missing_imports = true
+show_error_codes = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true

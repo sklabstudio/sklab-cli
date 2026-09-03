@@ -1,0 +1,9 @@
+{
+  "name": "{{PROJECT_SLUG}}",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "lint": "next lint"
+  }
+}
