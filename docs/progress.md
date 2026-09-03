@@ -70,3 +70,9 @@
 - Live read-only integration against `sklabstudio/coding-lab@main`: 12 prompts listed, `audit-repository` + `production-hardening` fetched, 60 files cached.
 - `sklabstudio/starters` does not exist yet → live starter integration **pending** (by design; CLI verified with local fixtures, no starter files invented).
 - Two real bugs found by verification and fixed: Unicode crash on cp1252 consoles (ASCII fallbacks + safe text printing, covered by `tests/unit/test_output.py`); Windows platformdirs ignoring env overrides (added `SKLAB_CONFIG_FILE`/`SKLAB_CACHE_DIR`, test-suite hermetic).
+
+## Real integration verification (2026-09-04, against live repos)
+- `sklabstudio/starters@main`: `init` × fullstack/api/frontend — correct dirs, nesting, hidden files, no cross-leakage, no leftover placeholders; dry-run writes nothing; existing destinations rejected; 404s → clean `DOWNLOAD_FAILED`, exit 1.
+- `sklabstudio/coding-lab@main`: 12 prompts + 8 workflows listed; 4 resources byte-identical to remote blobs; cache fetch → cached read → refresh → clear → refetch all verified.
+- Real bug found and fixed: on Windows, `npm` (an `npm.cmd` shim) was misreported as missing because CreateProcess cannot launch batch files. `run_command` now routes `.cmd`/`.bat` through `cmd /s /c` with exact-byte quoting (no `shell=True`), covered by `tests/unit/test_subprocess.py`. Verified: `npm --version` → 12.0.2; shipcheck executes (rather than skips) npm lint/build, reporting truthful project-state failures.
+- Suite at freeze: 112 passed, ruff clean, mypy clean (30 files), wheel rebuilt + clean-venv smoke-tested.

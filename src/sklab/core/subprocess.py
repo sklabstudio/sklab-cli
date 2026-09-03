@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,9 +35,10 @@ def run_command(
     """Run *argv* without a shell, capturing output. Never raises on missing binary."""
     if not argv or not all(isinstance(a, str) for a in argv):
         raise ValueError("argv must be a non-empty list of strings")
+    effective = _apply_windows_shim(argv)
     try:
         completed = subprocess.run(
-            argv,
+            effective,
             cwd=str(cwd) if cwd is not None else None,
             capture_output=True,
             text=True,
@@ -57,6 +60,30 @@ def run_command(
         stdout=_truncate(completed.stdout or ""),
         stderr=_truncate(completed.stderr or ""),
     )
+
+
+def _apply_windows_shim(argv: list[str], *, os_name: str = os.name) -> list[str] | str:
+    """Route Windows .cmd/.bat shims (e.g. npm.cmd) through cmd.exe.
+
+    ``CreateProcess`` cannot launch batch scripts directly, so without this an
+    installed ``npm`` is misreported as missing. The shim returns a single
+    command-line string in the canonical ``cmd /s /c ""exe" args"`` form
+    (passing a list would make list2cmdline re-escape the quotes and break
+    paths with spaces). Still no ``shell=True``; arguments are quoted with
+    list2cmdline so each stays a single cmd token, and only fixed,
+    well-understood argv are ever executed (never user input).
+    """
+    if os_name != "nt" or not argv:
+        return argv
+    try:
+        resolved = shutil.which(argv[0])
+    except OSError:
+        return argv
+    if resolved and os.path.splitext(resolved)[1].lower() in (".cmd", ".bat"):
+        comspec = os.environ.get("COMSPEC", "cmd.exe")
+        inner = subprocess.list2cmdline([resolved, *argv[1:]])
+        return f'{comspec} /d /s /c "{inner}"'
+    return argv
 
 
 def _truncate(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
