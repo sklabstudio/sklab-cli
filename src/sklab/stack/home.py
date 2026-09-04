@@ -79,9 +79,12 @@ def ensure_layout() -> dict[str, object]:
 
 
 def is_root() -> bool:
+    geteuid = getattr(os, "geteuid", None)
+    if not callable(geteuid):
+        return False
     try:
-        return os.geteuid() == 0  # type: ignore[attr-defined]
-    except (AttributeError, OSError):
+        return bool(geteuid() == 0)
+    except OSError:
         return False
 
 
