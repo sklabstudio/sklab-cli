@@ -108,4 +108,12 @@
       disk gate, private-absent/present, injection/traversal/symlink/redaction/shell-AST, PATH idempotency,
       node/docker/gh-auth/resource/roots/web-ui-smoke/git-offline/doctor-sections/setup-JSON
 - [x] Docs: setup/vps/troubleshooting/architecture/security/private-modules/README/CHANGELOG; version 0.3.0
-- [ ] Gate + publish + CI green + VPS acceptance (below)
+- [x] Live VPS acceptance (sklab-test, Ubuntu 24.04, 2 vCPU/3.8GB RAM/4.5GB swap/66GB free):
+  - `pipx install git+https://github.com/sklabstudio/sklab-cli.git` -> 0.3.0; dry-run pure (no state created)
+  - First `setup --all`: 16 real installs; found + fixed 3 live bugs: PATH-less SSH env hid health
+    binaries (verified via `--fix-path`, 1 idempotent .bashrc line), content repos got no marker
+    (now install_type git), web-ui READY without build (now frontend npm ci + next build + backend venv)
+  - Resume run -> 16/16 READY; `module install web-ui` -> real Next.js build OK on Node 18 (+LTS guidance)
+  - Module CLIs verified; backend `sklab-web-api` installed + importable; nothing started
+    (no containers/services/ports); second `setup --all`: all SKIPPED, no duplicates
+- [ ] Gate + publish + CI green (below)
