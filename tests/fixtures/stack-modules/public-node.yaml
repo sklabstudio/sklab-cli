@@ -1,0 +1,15 @@
+schema_version: 1
+id: public-node
+name: Public Node Fixture
+version: 0.1.0
+visibility: public
+source:
+  type: git
+  repository: sklabstudio/fixture-node
+install:
+  type: node
+  package: fixture-node
+health:
+  command: ["node", "--version"]
+capabilities:
+  - verification

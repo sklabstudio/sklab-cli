@@ -1,0 +1,16 @@
+schema_version: 1
+id: private-local-module
+name: Private Local Fixture
+version: 0.1.0
+visibility: private
+source:
+  type: git
+  url_env: SKLAB_PRIVATE_MODULE_URL
+install:
+  type: command
+  command: ["python", "-c", "import sys; sys.exit(0)"]
+health:
+  command: ["python", "--version"]
+capabilities: []
+dependencies:
+  - public-python

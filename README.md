@@ -6,6 +6,8 @@
 sklab init fullstack my-app
 sklab doctor
 sklab shipcheck
+sklab setup --dry-run
+sklab status
 ```
 
 ## Why
@@ -55,6 +57,13 @@ sklab shipcheck
 | `sklab init <starter> <name>` | Create a project from a starter |
 | `sklab starters` | List available starters |
 | `sklab doctor` | Diagnose the environment/repository (read-only) |
+| `sklab doctor --stack` | Workstation health (tools, modules, config, no paid AI) |
+| `sklab setup [--all\|--public] [--dry-run]` | Idempotent workstation setup |
+| `sklab status` | Module READY / DEGRADED / FAILED / NOT_INSTALLED / UNAVAILABLE |
+| `sklab modules` / `sklab modules add-manifest <file>` | List / register local (optional/private) manifests |
+| `sklab module install\|remove\|doctor <id>` | Per-module install / forget / health |
+| `sklab update [--dry-run]` | Safe ordered updates with honest rollback notes |
+| `sklab clean [--dry-run] [--yes]` | Clean only SKLab-owned caches/temp |
 | `sklab shipcheck` | Release readiness checks (may run tests/builds) |
 | `sklab prompts` / `sklab prompt <name>` | List / print a Coding Lab prompt |
 | `sklab workflows` / `sklab workflow <name>` | List / print a Coding Lab workflow |
@@ -107,6 +116,44 @@ Checks adapt to the repository: Python checks only run for Python projects,
 Node checks only for Node projects, Docker checks only where Docker files
 exist. `doctor` is inspection-only — it never installs, modifies, or starts
 anything. Statuses: `PASS`, `WARNING`, `FAIL`, `SKIPPED`, `UNKNOWN`.
+
+`sklab doctor --stack` checks the workstation instead: Python/Node/Git/Docker
+tools, module CLIs, versions, configuration, module health, dependency
+consistency, writable `~/.sklab` dirs. It never runs paid AI. See
+`docs/setup.md` and `docs/private-modules.md`.
+
+## Workstation Setup (v0.2)
+
+```sh
+sklab setup --public --dry-run
+sklab setup --public --yes
+sklab setup --all --dry-run
+sklab status
+sklab status --json
+sklab doctor --stack
+```
+
+- `setup --public`: install all configured public modules (default scope).
+- `setup --all`: public + optional locally-registered modules (private overlays
+  attach via `~/.sklab/modules.d/*.yaml`; inaccessible ones skip cleanly).
+- `--dry-run` shows the exact dependency-ordered plan without side effects.
+- Setup is idempotent: re-running skips `READY` modules.
+- `status` never fakes `READY`; missing work shows `NOT_INSTALLED` /
+  `UNAVAILABLE` / `PENDING`.
+- Public CLI contains only public infrastructure. Private modules attach
+  locally and public modules can never depend on private ones
+  (`PRIVATE → PUBLIC` only, enforced).
+
+Home layout (`SKLAB_HOME` overrides `~/.sklab` in tests):
+
+```text
+~/.sklab/
+  config/
+  modules.d/
+  state/
+  logs/
+  cache/
+```
 
 ## Ship Check
 
@@ -167,8 +214,9 @@ Settings: `starters_source`, `coding_lab_source`, `default_branch`,
 ## JSON output
 
 `starters`, `doctor`, `shipcheck`, `prompts`, `workflows`, `config show`,
-`cache status`, and `info` accept `--json` and print a single valid JSON
-document to stdout.
+`cache status`, `info`, `setup`, `status`, `modules`, `module`, `update`, and
+`clean` accept `--json` and print a single valid JSON document to stdout
+(diagnostics go to stderr).
 
 ## Exit codes
 
@@ -204,8 +252,11 @@ python -m pytest
 
 - archive path-traversal protection with unpack limits,
 - subprocess calls use argument arrays (never `shell=True`) with timeouts,
+- manifests require structured argv arrays; no `curl|bash`, no arbitrary remote hooks,
+- no hidden sudo, no credential scraping, no secret logging (redacted),
 - destination validation; no silent overwrites or deletes,
 - starter content is treated as files, never executed,
+- PUBLIC stays PUBLIC / PRIVATE stays PRIVATE; public modules cannot depend on private ones,
 - environment secrets are never logged (only non-secret settings are shown).
 
 ## Roadmap (not built yet)

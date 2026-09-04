@@ -1,4 +1,4 @@
-"""``sklab doctor``: read-only environment/repository diagnostics."""
+"""``sklab doctor``: read-only repository diagnostics + optional workstation stack health."""
 
 from __future__ import annotations
 
@@ -21,9 +21,21 @@ def register(app: typer.Typer) -> None:
             None, "--path", help="Repository path to inspect (default: current directory)."
         ),
         json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+        stack: bool = typer.Option(
+            False, "--stack", help="Inspect the SKLab workstation stack (tools, modules, config, health)."
+        ),
     ) -> None:
-        """Inspect the environment and repository without changing anything."""
+        """Inspect the environment and repository without changing anything.
+
+        Default (no flags) preserves the v0.1 repository diagnostics.
+        Pass --stack for workstation health (Python/Node/Git/Docker, module
+        CLIs, versions, config, module health, dependency consistency,
+        writable dirs). Never runs paid AI.
+        """
         try:
+            if stack:
+                _stack_doctor(json_output)
+                return
             root = (path or Path.cwd()).resolve()
             info, checks = run_doctor(root)
             if json_output:
@@ -54,3 +66,57 @@ def register(app: typer.Typer) -> None:
             fail(exc, json_mode=json_output)
         except Exception as exc:  # noqa: BLE001
             handle_unexpected(exc, json_mode=json_output)
+
+
+def _stack_doctor(json_output: bool) -> None:
+    from sklab.stack.operations import stack_doctor
+    from sklab.stack.redaction import redact_text
+    from sklab.stack.registry import load_registry
+
+    registry = load_registry()
+    report = stack_doctor(registry)
+    if json_output:
+        output.print_json(report)
+        return
+    console = output.get_console()
+    console.print("[bold]SKLab Doctor (stack)[/bold]\n")
+    console.print(f"Platform: {report['platform']}  Python: {report['python']}\n")
+    tools_table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
+    tools_table.add_column("Tool", style="bold")
+    tools_table.add_column("Available")
+    tools_table.add_column("Version")
+    tools_raw = report.get("tools")
+    tools: list[object] = tools_raw if isinstance(tools_raw, list) else []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        tools_table.add_row(
+            str(tool.get("tool")), str(tool.get("available")), redact_text(str(tool.get("version", "")))
+        )
+    console.print(tools_table)
+    console.print("")
+    mod_table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
+    mod_table.add_column("Module", style="bold")
+    mod_table.add_column("Version")
+    mod_table.add_column("Status")
+    mod_table.add_column("Details")
+    modules_raw = report.get("modules")
+    modules: list[object] = modules_raw if isinstance(modules_raw, list) else []
+    for item in modules:
+        if not isinstance(item, dict):
+            continue
+        mod_table.add_row(
+            str(item.get("name")), str(item.get("version")),
+            output.styled_status(str(item.get("status"))),
+            redact_text(str(item.get("detail", ""))),
+        )
+    console.print(mod_table)
+    consistency_raw = report.get("dependency_consistency")
+    consistency: dict[object, object] = consistency_raw if isinstance(consistency_raw, dict) else {}
+    if not consistency.get("ok"):
+        console.print(f"\nDependency issue: {redact_text(str(consistency.get('error')))}")
+    summary_raw = report.get("summary")
+    summary: dict[object, object] = summary_raw if isinstance(summary_raw, dict) else {}
+    parts = [f"{k}: {v}" for k, v in sorted(summary.items(), key=lambda kv: str(kv[0]))]
+    console.print(f"\nSummary: {'; '.join(parts) if parts else 'no modules'}")
+    console.print("No paid AI was run.")

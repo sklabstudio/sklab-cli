@@ -76,3 +76,21 @@
 - `sklabstudio/coding-lab@main`: 12 prompts + 8 workflows listed; 4 resources byte-identical to remote blobs; cache fetch → cached read → refresh → clear → refetch all verified.
 - Real bug found and fixed: on Windows, `npm` (an `npm.cmd` shim) was misreported as missing because CreateProcess cannot launch batch files. `run_command` now routes `.cmd`/`.bat` through `cmd /s /c` with exact-byte quoting (no `shell=True`), covered by `tests/unit/test_subprocess.py`. Verified: `npm --version` → 12.0.2; shipcheck executes (rather than skips) npm lint/build, reporting truthful project-state failures.
 - Suite at freeze: 112 passed, ruff clean, mypy clean (30 files), wheel rebuilt + clean-venv smoke-tested.
+
+## Phase 11 — v0.2 stack setup & integration foundation (2026-09-04)
+- [x] `stack/manifest.py` — strict v1 schema (argv arrays, aliases, fingerprint)
+- [x] `stack/registry.py` — 16-module builtin public registry + `modules.d` overlay
+- [x] `stack/resolver.py` — stable ordering, cycles, missing, versions, `PUBLIC→PRIVATE` rejection
+- [x] `stack/adapters.py` — conservative python/node/git/docker-compose/command/local (no shell)
+- [x] `stack/operations.py` — setup/dry-run/status/`doctor --stack`/update/clean
+- [x] `stack/state.py` — atomic JSON state; `stack/redaction.py` — no telemetry
+- [x] Commands: `setup`, `status`, `modules(+add-manifest)`, `module install|remove|doctor`, `update`, `clean`
+- [x] `doctor` preserves v0.1 repo behavior; `--stack` adds workstation health (no paid AI)
+- [x] Fixtures: public-python/node, optional, private-local, missing-dep, cycle-a/b, failed/degraded health
+- [x] Tests: 37 unit + 15 CLI integration (offline, hermetic `SKLAB_HOME`); full suite 164 passed
+- [x] Docs: architecture/modules/setup/private-modules/security/vps/troubleshooting/progress; README/CHANGELOG; version 0.2.0
+- [x] Gate: `pytest` 164 passed, `ruff` clean, `mypy` clean (44 files), `python -m build` + wheel smoke
+- [ ] Pending concurrently-built integrations: real public repos expose varied CLIs/install flows; builtin
+      health probes are generic (`<cli> --version`) and report `NOT_INSTALLED` until repos land — never faked
+      `READY`. Recorded here; no probing, no waiting, no private code copied.
+- [ ] Publish `sklabstudio/sklab-cli` `main` (commit + push + Actions green) when credentials available.

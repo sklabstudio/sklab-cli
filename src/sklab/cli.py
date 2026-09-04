@@ -8,7 +8,21 @@ import sys
 import typer
 
 from sklab import __version__
-from sklab.commands import cache_cmd, config_cmd, doctor, init, prompts, shipcheck, starters, workflows
+from sklab.commands import (
+    cache_cmd,
+    clean_cmd,
+    config_cmd,
+    doctor,
+    init,
+    modules_cmd,
+    prompts,
+    setup_cmd,
+    shipcheck,
+    starters,
+    status_cmd,
+    update_cmd,
+    workflows,
+)
 from sklab.core import output, paths
 from sklab.core.config import KEYS, load_config
 
@@ -46,6 +60,12 @@ shipcheck.register(app)
 starters.register(app)
 prompts.register(app)
 workflows.register(app)
+setup_cmd.register(app)
+status_cmd.register(app)
+modules_cmd.register_modules(app)
+modules_cmd.register_module_group(app)
+update_cmd.register(app)
+clean_cmd.register(app)
 
 app.add_typer(config_cmd.app, name="config")
 app.add_typer(cache_cmd.app, name="cache")

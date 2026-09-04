@@ -1,0 +1,15 @@
+schema_version: 1
+id: public-python
+name: Public Python Fixture
+version: 0.1.0
+visibility: public
+source:
+  type: git
+  repository: sklabstudio/fixture-python
+install:
+  type: python
+  package_path: .
+health:
+  command: ["python", "--version"]
+capabilities:
+  - verification

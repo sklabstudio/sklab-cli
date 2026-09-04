@@ -1,0 +1,15 @@
+schema_version: 1
+id: dependency-cycle-b
+name: Cycle B Fixture
+version: 0.1.0
+visibility: public
+source:
+  type: git
+  repository: sklabstudio/fixture-cycle-b
+install:
+  type: command
+  command: ["python", "-c", "import sys; sys.exit(0)"]
+health:
+  command: ["python", "--version"]
+dependencies:
+  - dependency-cycle-a

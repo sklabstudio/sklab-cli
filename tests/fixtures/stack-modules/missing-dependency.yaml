@@ -1,0 +1,15 @@
+schema_version: 1
+id: missing-dependency
+name: Missing Dependency Fixture
+version: 0.1.0
+visibility: public
+source:
+  type: git
+  repository: sklabstudio/fixture-missing
+install:
+  type: command
+  command: ["python", "-c", "import sys; sys.exit(0)"]
+health:
+  command: ["python", "--version"]
+dependencies:
+  - no-such-module

@@ -105,21 +105,25 @@ STATUS_STYLES: dict[str, str] = {
     "PASS": "green",
     "READY": "green",
     "WARNING": "yellow",
+    "DEGRADED": "yellow",
     "READY_WITH_WARNINGS": "yellow",
     "FAIL": "red",
+    "FAILED": "red",
     "NOT_READY": "red",
     "SKIPPED": "dim",
+    "NOT_INSTALLED": "dim",
+    "UNAVAILABLE": "dim",
     "UNKNOWN": "dim",
 }
 
 
 _ASCII_SYMBOLS = {
-    "PASS": "+", "READY": "+", "WARNING": "!", "READY_WITH_WARNINGS": "!",
-    "FAIL": "x", "NOT_READY": "x",
+    "PASS": "+", "READY": "+", "WARNING": "!", "DEGRADED": "!", "READY_WITH_WARNINGS": "!",
+    "FAIL": "x", "FAILED": "x", "NOT_READY": "x",
 }
 _UNICODE_SYMBOLS = {
-    "PASS": "✓", "READY": "✓", "WARNING": "!", "READY_WITH_WARNINGS": "!",
-    "FAIL": "✗", "NOT_READY": "✗",
+    "PASS": "✓", "READY": "✓", "WARNING": "!", "DEGRADED": "!", "READY_WITH_WARNINGS": "!",
+    "FAIL": "✗", "FAILED": "✗", "NOT_READY": "✗",
 }
 
 

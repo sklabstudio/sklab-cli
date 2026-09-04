@@ -1,0 +1,13 @@
+schema_version: 1
+id: failed-health
+name: Failed Health Fixture
+version: 0.1.0
+visibility: public
+source:
+  type: git
+  repository: sklabstudio/fixture-failed
+install:
+  type: command
+  command: ["python", "-c", "import sys; sys.exit(0)"]
+health:
+  command: ["python", "-c", "import sys; sys.exit(2)"]

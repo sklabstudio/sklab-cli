@@ -1,0 +1,13 @@
+schema_version: 1
+id: degraded-health
+name: Degraded Health Fixture
+version: 0.1.0
+visibility: public
+source:
+  type: git
+  repository: sklabstudio/fixture-degraded
+install:
+  type: command
+  command: ["python", "-c", "import sys; sys.exit(0)"]
+health:
+  command: ["python", "-c", "import sys; sys.exit(1)"]

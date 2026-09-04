@@ -1,0 +1,14 @@
+schema_version: 1
+id: optional-module
+name: Optional Fixture
+version: 0.1.0
+visibility: public
+source:
+  type: git
+  repository: sklabstudio/fixture-optional
+install:
+  type: command
+  command: ["python", "-c", "import sys; sys.exit(0)"]
+health:
+  command: ["sklab-nonexistent-binary-xyz", "--version"]
+capabilities: []
