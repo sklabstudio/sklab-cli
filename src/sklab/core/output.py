@@ -113,6 +113,8 @@ STATUS_STYLES: dict[str, str] = {
     "SKIPPED": "dim",
     "NOT_INSTALLED": "dim",
     "UNAVAILABLE": "dim",
+    "AUTH_REQUIRED": "yellow",
+    "NO_CHANGE": "dim",
     "UNKNOWN": "dim",
 }
 

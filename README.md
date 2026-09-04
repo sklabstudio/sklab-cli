@@ -119,30 +119,45 @@ anything. Statuses: `PASS`, `WARNING`, `FAIL`, `SKIPPED`, `UNKNOWN`.
 
 `sklab doctor --stack` checks the workstation instead: Python/Node/Git/Docker
 tools, module CLIs, versions, configuration, module health, dependency
-consistency, writable `~/.sklab` dirs. It never runs paid AI. See
-`docs/setup.md` and `docs/private-modules.md`.
+consistency, writable dirs, PATH, resources, and GitHub auth state.
+It never runs paid AI. See `docs/setup.md` and `docs/private-modules.md`.
 
-## Workstation Setup (v0.2)
+## Workstation Setup (v0.3: real one-command VPS bootstrap)
 
 ```sh
-sklab setup --public --dry-run
-sklab setup --public --yes
+pipx install "git+https://github.com/sklabstudio/sklab-cli.git"
 sklab setup --all --dry-run
+sklab setup --all
 sklab status
-sklab status --json
 sklab doctor --stack
 ```
 
 - `setup --public`: install all configured public modules (default scope).
 - `setup --all`: public + optional locally-registered modules (private overlays
-  attach via `~/.sklab/modules.d/*.yaml`; inaccessible ones skip cleanly).
-- `--dry-run` shows the exact dependency-ordered plan without side effects.
-- Setup is idempotent: re-running skips `READY` modules.
+  attach via `~/.sklab/modules.d/*.yaml`; missing auth reports `AUTH_REQUIRED`
+  without crashing the public install).
+- `--dry-run` shows the exact dependency-ordered plan with zero side effects
+  (no clone/fetch/install/docker/apt/PATH/service).
+- Normal setup shows the plan and asks `Proceed with N installs? [y/N]`;
+  `--yes` approves non-interactively for VPS bootstrap/CI.
+- `--fix-path` (implied by `--yes`) appends `export PATH="$HOME/.local/bin:$PATH"`
+  idempotently when `~/.local/bin` is missing from PATH; `doctor --stack` detects it.
+- Setup is idempotent and resumable: re-running skips `READY` modules,
+  preserves successes, marks failures precisely, and prints resume instructions.
 - `status` never fakes `READY`; missing work shows `NOT_INSTALLED` /
-  `UNAVAILABLE` / `PENDING`.
+  `UNAVAILABLE` / `AUTH_REQUIRED`.
 - Public CLI contains only public infrastructure. Private modules attach
   locally and public modules can never depend on private ones
-  (`PRIVATE → PUBLIC` only, enforced).
+  (enforced).
+
+Install locations (repos and runtime always separated, never scattered):
+
+```text
+root:     /opt/sklab/{repos,runtime,logs}
+non-root: ~/.local/share/sklab/{repos,runtime,logs}
+state:    ~/.sklab/state/install-state.json  (atomic writes)
+logs:     logs/setup-<timestamp>.log (redacted)
+```
 
 Home layout (`SKLAB_HOME` overrides `~/.sklab` in tests):
 
@@ -154,6 +169,11 @@ Home layout (`SKLAB_HOME` overrides `~/.sklab` in tests):
   logs/
   cache/
 ```
+
+4GB RAM + swap = supported test minimum (heavy modules run sequentially);
+16GB = recommended full workstation. Service management
+(`start/stop/restart`, systemd) is deliberately deferred to the next phase;
+v0.3 scope is setup + health.
 
 ## Ship Check
 

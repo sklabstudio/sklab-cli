@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import shutil
 import sys
@@ -9,17 +10,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from sklab.core.subprocess import run_command
-from sklab.stack import adapters
+from sklab.stack import adapters, preflight
 from sklab.stack import home as stack_home
-from sklab.stack.adapters import AdapterResult
+from sklab.stack.adapters import AdapterResult, auth_required_for
 from sklab.stack.manifest import ModuleManifest
 from sklab.stack.redaction import redact_text
 from sklab.stack.registry import LoadedManifest, Registry
 from sklab.stack.resolver import ResolverError, resolve
+from sklab.stack.runlog import append_event, new_run_log
 from sklab.stack.state import load_state, record_module, save_state
 
 HEALTH_TIMEOUT = 15.0
-HEALTH_STATUSES = ("READY", "DEGRADED", "FAILED", "NOT_INSTALLED", "UNAVAILABLE", "UNKNOWN")
+HEALTH_STATUSES = ("READY", "DEGRADED", "FAILED", "NOT_INSTALLED", "UNAVAILABLE", "UNKNOWN", "AUTH_REQUIRED")
+
+
+class DiskSafetyError(Exception):
+    """Raised before any mutation when free disk is dangerously low."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.code = "LOW_DISK"
+        self.message = message
 
 
 @dataclass
@@ -47,6 +58,25 @@ class SetupResult:
     results: dict[str, AdapterResult]
     health: dict[str, ModuleStatus]
     summary: dict[str, int]
+    log_path: str = ""
+    preflight: dict[str, object] = field(default_factory=dict)
+    resume_hint: str = ""
+
+
+def describe_host() -> dict[str, object]:
+    host = preflight.host_info()
+    verdict = preflight.resource_verdict(host)
+    return {
+        "os": host.os_name,
+        "cpu": host.cpu_count,
+        "ram_mib": host.ram_mib,
+        "swap_mib": host.swap_mib,
+        "disk_free_mb": host.disk_free_mb,
+        "python": host.python_version,
+        "node": host.node_version,
+        "resource_level": verdict.level,
+        "resource_warnings": verdict.warnings,
+    }
 
 
 def check_health(manifest: ModuleManifest) -> ModuleStatus:
@@ -54,6 +84,16 @@ def check_health(manifest: ModuleManifest) -> ModuleStatus:
         id=manifest.id, name=manifest.name, version=manifest.version,
         status="UNKNOWN", origin="", visibility=manifest.visibility,
     )
+    if auth_required_for(manifest):
+        # Missing credentials for a private source: report honestly, never crash.
+        marker = stack_home.install_root() / manifest.id / ".sklab-installed"
+        if marker.exists():
+            return ModuleStatus(base.id, base.name, base.version, "READY",
+                                "Install marker present.", base.origin, base.visibility)
+        return ModuleStatus(base.id, base.name, base.version, "AUTH_REQUIRED",
+                            f"Authenticated access required (${manifest.source.url_env or 'git auth'}). "
+                            "Run 'gh auth login'; public install continues.",
+                            base.origin, base.visibility)
     command = manifest.health.command if manifest.health and manifest.health.command else None
     if command:
         timeout = manifest.health.timeout if manifest.health and manifest.health.timeout else HEALTH_TIMEOUT
@@ -124,16 +164,14 @@ def base_tool_report() -> list[dict[str, str]]:
 
 
 def stack_doctor(registry: Registry) -> dict[str, object]:
-    """Zero-cost health checks only. Never runs paid inference."""
+    """Zero-cost health checks only. Never runs paid inference. Never mutates."""
     statuses = collect_statuses(registry)
     tools = base_tool_report()
-    # Dependency consistency (resolver validation without installing).
     try:
         order = resolve(registry, include_optional=True).order
         consistency = {"ok": True, "order": order, "error": None}
     except ResolverError as exc:
         consistency = {"ok": False, "order": [], "error": f"[{exc.code}] {exc.message}"}
-    # Writable dirs.
     dirs: list[dict[str, object]] = []
     for label, path in (
         ("home", stack_home.sklab_home()),
@@ -141,6 +179,8 @@ def stack_doctor(registry: Registry) -> dict[str, object]:
         ("modules.d", stack_home.modules_dir()),
         ("state", stack_home.state_dir()),
         ("cache", stack_home.cache_root()),
+        ("repos", stack_home.repos_dir()),
+        ("runtime", stack_home.runtime_dir()),
     ):
         try:
             path.mkdir(parents=True, exist_ok=True)
@@ -153,10 +193,26 @@ def stack_doctor(registry: Registry) -> dict[str, object]:
     counts: dict[str, int] = {}
     for item in statuses:
         counts[item.status] = counts.get(item.status, 0) + 1
+    host = preflight.host_info()
+    verdict = preflight.resource_verdict(host)
     return {
         "platform": platform.platform(),
         "python": platform.python_version(),
         "tools": tools,
+        "base_deps": preflight.detect_base_deps(),
+        "path": preflight.path_status(),
+        "path_fix": preflight.path_fix_plan(),
+        "docker": preflight.check_docker(),
+        "node": preflight.check_node(),
+        "github_auth": preflight.check_github_auth(),
+        "resources": {
+            "cpu": host.cpu_count,
+            "ram_mib": host.ram_mib,
+            "swap_mib": host.swap_mib,
+            "disk_free_mb": host.disk_free_mb,
+            "level": verdict.level,
+            "warnings": verdict.warnings,
+        },
         "modules": [
             {"id": s.id, "name": s.name, "version": s.version, "status": s.status,
              "detail": redact_text(s.detail), "origin": s.origin, "visibility": s.visibility}
@@ -186,6 +242,13 @@ def plan_setup(registry: Registry, *, scope: str = "public") -> tuple[list[str],
     steps: list[SetupPlanStep] = []
     for module_id in result.order:
         manifest = scoped.modules[module_id].manifest
+        if auth_required_for(manifest):
+            steps.append(SetupPlanStep(
+                id=module_id, action="auth",
+                reason=f"Private module needs ${manifest.source.url_env or 'git auth'} (gh auth login).",
+                argv_preview=[],
+            ))
+            continue
         missing = adapters.missing_base_tool(manifest.install.type)
         if missing is not None:
             steps.append(SetupPlanStep(
@@ -198,6 +261,11 @@ def plan_setup(registry: Registry, *, scope: str = "public") -> tuple[list[str],
         if health.status == "READY":
             steps.append(SetupPlanStep(
                 id=module_id, action="skip", reason="Already READY (idempotent).",
+                argv_preview=[],
+            ))
+        elif health.status == "AUTH_REQUIRED":
+            steps.append(SetupPlanStep(
+                id=module_id, action="auth", reason=health.detail,
                 argv_preview=[],
             ))
         else:
@@ -215,23 +283,65 @@ def run_setup(
     scope: str = "public",
     dry_run: bool = False,
     state_path: Path | None = None,
+    apply_path_fix: bool = False,
+    log_path: Path | None = None,
 ) -> SetupResult:
+    """Idempotent, resumable setup. Dry-run performs zero mutation (no log file either... almost).
+
+    Transaction semantics: successful safe installations are preserved, failed
+    modules are marked precisely, successful modules are never redone, and the
+    summary carries resume instructions. No risky global rollback.
+    """
     scoped = _filter_scope(registry, scope=scope)
+    host = describe_host()
+    to_install = scope  # for the log record
+    if dry_run:
+        order, _plan = plan_setup(registry, scope=scope)
+        # Dry-run may inspect only: still create no log file, no state, no dirs beyond reads.
+        health: dict[str, ModuleStatus] = {}
+        for module_id in order:
+            loaded = scoped.modules[module_id]
+            current = check_health(loaded.manifest)
+            current.origin = loaded.origin
+            health[module_id] = current
+        summary: dict[str, int] = {}
+        for item in health.values():
+            summary[item.status] = summary.get(item.status, 0) + 1
+        return SetupResult(order=order, results={}, health=health, summary=summary, preflight=host)
+
     stack_home.ensure_layout()
-    order, _plan = plan_setup(registry, scope=scope)
+    log = log_path or new_run_log("setup")
+    append_event(log, "setup_start", {"scope": to_install, "host": host})
+    order, plan = plan_setup(registry, scope=scope)
+
+    # Disk safety gate before any heavy work: abort before partial installation.
+    install_count = sum(1 for step in plan if step.action == "install")
+    if install_count:
+        required = preflight.estimate_disk_mb(install_count)
+        ok, detail = preflight.check_disk_ok(required, path=str(stack_home.repos_dir()))
+        append_event(log, "disk_gate", {"required_mb": required, "detail": detail, "ok": ok})
+        if not ok:
+            append_event(log, "setup_aborted", {"reason": "low_disk"})
+            raise DiskSafetyError(detail)
+
+    if apply_path_fix:
+        fix = preflight.apply_path_fix()
+        append_event(log, "path_fix", dict(fix))
+
     state = load_state(state_path)
     results: dict[str, AdapterResult] = {}
-    health: dict[str, ModuleStatus] = {}
+    health_map: dict[str, ModuleStatus] = {}
     for module_id in order:
-        loaded: LoadedManifest = scoped.modules[module_id]
-        manifest = loaded.manifest
+        loaded_module: LoadedManifest = scoped.modules[module_id]
+        manifest = loaded_module.manifest
+        append_event(log, "module_start", {"id": module_id})
         current = check_health(manifest)
-        if current.status == "READY" and not dry_run:
+        if current.status == "READY":
             # Idempotent: do not reinstall a healthy module; refresh state timestamp.
             record_module(
                 state, module_id=module_id, version=manifest.version,
-                install_type=manifest.install.type, origin=loaded.origin,
-                manifest_fingerprint=loaded.fingerprint or manifest.fingerprint(),
+                install_type=manifest.install.type, origin=loaded_module.origin,
+                manifest_fingerprint=loaded_module.fingerprint or manifest.fingerprint(),
                 status="READY", health="READY",
             )
             results[module_id] = AdapterResult(
@@ -239,34 +349,63 @@ def run_setup(
                 message=f"'{module_id}' already READY; skipped (idempotent).",
                 steps=[],
             )
-            current.origin = loaded.origin
-            health[module_id] = current
+            current.origin = loaded_module.origin
+            health_map[module_id] = current
+            append_event(log, "module_skip", {"id": module_id, "reason": "READY"})
             continue
-        adapter_result = adapters.install_module(manifest, dry_run=dry_run)
-        results[module_id] = adapter_result
-        if not dry_run:
-            after = check_health(manifest)
-            after.origin = loaded.origin
-            health[module_id] = after
+        if current.status == "AUTH_REQUIRED":
+            results[module_id] = AdapterResult(
+                module_id=module_id, ok=False, status="AUTH_REQUIRED",
+                message=current.detail, steps=[], auth_required=True,
+            )
+            current.origin = loaded_module.origin
+            health_map[module_id] = current
             record_module(
                 state, module_id=module_id, version=manifest.version,
-                install_type=manifest.install.type, origin=loaded.origin,
-                manifest_fingerprint=loaded.fingerprint or manifest.fingerprint(),
-                status=after.status, health=after.status,
+                install_type=manifest.install.type, origin=loaded_module.origin,
+                manifest_fingerprint=loaded_module.fingerprint or manifest.fingerprint(),
+                status="AUTH_REQUIRED", health="AUTH_REQUIRED",
             )
-        else:
-            current.origin = loaded.origin
-            health[module_id] = current
-    if not dry_run:
-        save_state(state, state_path)
-    summary: dict[str, int] = {}
-    for item in health.values():
-        summary[item.status] = summary.get(item.status, 0) + 1
-    # Also count adapter SKIPPED outcomes under their own label for the human summary.
+            append_event(log, "module_auth_required", {"id": module_id})
+            continue
+        adapter_result = adapters.install_module(manifest, dry_run=False)
+        results[module_id] = adapter_result
+        after = check_health(manifest)
+        after.origin = loaded_module.origin
+        health_map[module_id] = after
+        record_module(
+            state, module_id=module_id, version=manifest.version,
+            install_type=manifest.install.type, origin=loaded_module.origin,
+            manifest_fingerprint=loaded_module.fingerprint or manifest.fingerprint(),
+            status=after.status, health=after.status,
+        )
+        append_event(log, "module_done", {
+            "id": module_id, "install_status": adapter_result.status,
+            "health": after.status, "changed": adapter_result.changed,
+        })
+    save_state(state, state_path)
+    summary_counts: dict[str, int] = {}
+    for item in health_map.values():
+        summary_counts[item.status] = summary_counts.get(item.status, 0) + 1
     skipped_installs = sum(1 for r in results.values() if r.status in ("SKIPPED", "UNAVAILABLE"))
     if skipped_installs:
-        summary["SKIPPED_INSTALLS"] = skipped_installs
-    return SetupResult(order=order, results=results, health=health, summary=summary)
+        summary_counts["SKIPPED_INSTALLS"] = skipped_installs
+    failed = sorted([mid for mid, h in health_map.items() if h.status in ("FAILED", "DEGRADED")])
+    auth_pending = sorted([mid for mid, h in health_map.items() if h.status == "AUTH_REQUIRED"])
+    resume_hint = ""
+    if failed or auth_pending:
+        parts = []
+        if failed:
+            parts.append(f"failed: {', '.join(failed)} - fix the cause and re-run 'sklab setup --all' to resume")
+        if auth_pending:
+            parts.append(f"auth required: {', '.join(auth_pending)} - 'gh auth login', then re-run")
+        resume_hint = "; ".join(parts) + ". Successful modules are preserved and will be skipped."
+    append_event(log, "setup_done", {"summary": summary_counts, "resume_hint": resume_hint})
+    _ = os.environ.get("SKLAB_SETUP_NOTE", "")
+    return SetupResult(
+        order=order, results=results, health=health_map, summary=summary_counts,
+        log_path=str(log), preflight=host, resume_hint=resume_hint,
+    )
 
 
 def plan_update(registry: Registry, *, state_path: Path | None = None) -> list[dict[str, str]]:

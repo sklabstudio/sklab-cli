@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sklab-cli"
-version = "0.2.0"
+version = "0.3.0"
 description = "Developer workflows, project starters, diagnostics, and release checks from SKLab Studio."
 readme = "README.md"
 requires-python = ">=3.12"

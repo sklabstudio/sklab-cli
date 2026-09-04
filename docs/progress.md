@@ -94,3 +94,18 @@
       health probes are generic (`<cli> --version`) and report `NOT_INSTALLED` until repos land — never faked
       `READY`. Recorded here; no probing, no waiting, no private code copied.
 - [ ] Publish `sklabstudio/sklab-cli` `main` (commit + push + Actions green) when credentials available.
+
+## Phase 12 — v0.3 one-command VPS bootstrap & real installer
+- [x] `stack/home.py` — `/opt/sklab` (root) vs XDG data dir + `repos/`/`runtime/`/`logs` split (v0.2 paths kept)
+- [x] `stack/preflight.py` — resources/disk/PATH/base-deps/node-engines/docker-states/gh-auth (inspect-only)
+- [x] `stack/adapters.py` — REAL plan/install/update/verify/uninstall: pipx→venv→pip, npm ci+build,
+      git clone/fetch ff-only, compose-up only when defined, argv-only command, symlink-aware local
+- [x] `stack/operations.py` — `AUTH_REQUIRED`, disk-safety abort, redacted run logs, resume/repair hints
+- [x] `stack/runlog.py`, `stack/state.py` legacy `state.json` read path
+- [x] Setup UX (Host + Plan + AUTH rows, `--fix-path`, `--yes`), `doctor --stack` new sections,
+      `status` auth line; services (`start/stop/restart`) deliberately deferred to next phase
+- [x] Tests `tests/unit/test_v03.py` (24): dry-run purity, 2nd-run idempotency, failed-step resume,
+      disk gate, private-absent/present, injection/traversal/symlink/redaction/shell-AST, PATH idempotency,
+      node/docker/gh-auth/resource/roots/web-ui-smoke/git-offline/doctor-sections/setup-JSON
+- [x] Docs: setup/vps/troubleshooting/architecture/security/private-modules/README/CHANGELOG; version 0.3.0
+- [ ] Gate + publish + CI green + VPS acceptance (below)

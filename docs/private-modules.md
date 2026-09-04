@@ -33,6 +33,19 @@ sklab module doctor private-module
 sklab setup --all --dry-run   # includes it when accessible
 ```
 
+Known private modules (examples, never embedded in public descriptors):
+
+```text
+~/.sklab/modules.d/appsec-lab.yaml
+~/.sklab/modules.d/protocol-intelligence.yaml
+```
+
+Behavior: manifest present → validate, resolve deps, verify authenticated
+access (`gh auth status` / credential helper), install on `--all`. Manifest
+absent → module simply unregistered. Auth missing → `AUTH_REQUIRED` (public
+install continues, no crash). Never ask for tokens in logs; never store GitHub
+tokens in SKLab state; never print tokens.
+
 Rules:
 
 - The manifest remains local (`~/.sklab/modules.d/`); the CLI never uploads it.

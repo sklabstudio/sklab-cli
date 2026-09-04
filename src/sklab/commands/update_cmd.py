@@ -8,7 +8,7 @@ from rich.table import Table
 from sklab.commands.common import fail, handle_unexpected
 from sklab.core import output
 from sklab.core.errors import SklabError
-from sklab.stack.adapters import install_module
+from sklab.stack.adapters import update_module
 from sklab.stack.operations import check_health, plan_update
 from sklab.stack.redaction import redact_text
 from sklab.stack.registry import load_registry
@@ -52,12 +52,12 @@ def register(app: typer.Typer) -> None:
                     continue
                 loaded = registry.modules[item["id"]]
                 manifest = loaded.manifest
-                install_result = install_module(manifest, dry_run=False)
+                install_result = update_module(manifest)
                 health = check_health(manifest)
-                # Rollback is only safe where the adapter supports it (local/command).
+                # Rollback is only safe where the adapter supports it (local/command/git ff-only).
                 # Otherwise report honestly that no automatic rollback was attempted.
                 if not install_result.ok and install_result.status == "FAILED":
-                    if manifest.install.type in ("local", "command"):
+                    if manifest.install.type in ("local", "command", "git"):
                         rollback_notes.append(f"{item['id']}: install failed; previous marker preserved where present.")
                     else:
                         rollback_notes.append(

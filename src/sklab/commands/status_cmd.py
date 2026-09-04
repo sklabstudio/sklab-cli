@@ -17,7 +17,7 @@ def register(app: typer.Typer) -> None:
     def status(
         json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
     ) -> None:
-        """Show READY / DEGRADED / FAILED / NOT_INSTALLED / UNAVAILABLE per module."""
+        """Show READY / DEGRADED / FAILED / NOT_INSTALLED / UNAVAILABLE / AUTH_REQUIRED per module."""
         try:
             registry = load_registry()
             items = collect_statuses(registry)
@@ -39,10 +39,13 @@ def register(app: typer.Typer) -> None:
             for item in items:
                 table.add_row(item.name, item.version, output.styled_status(item.status))
             console.print(table)
-            pending = [s for s in items if s.status in ("NOT_INSTALLED", "UNAVAILABLE", "UNKNOWN")]
+            pending = [s for s in items if s.status in ("NOT_INSTALLED", "UNAVAILABLE", "UNKNOWN", "AUTH_REQUIRED")]
             if pending:
                 console.print(f"\n{len(pending)} module(s) not ready.")
                 console.print("Run 'sklab setup --dry-run' for the install plan.")
+                auth = [s for s in pending if s.status == "AUTH_REQUIRED"]
+                if auth:
+                    console.print(f"Auth required: {', '.join(s.id for s in auth)} — 'gh auth login'.")
         except SklabError as exc:
             fail(exc, json_mode=json_output)
         except Exception as exc:  # noqa: BLE001

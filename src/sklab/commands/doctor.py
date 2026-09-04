@@ -115,6 +115,29 @@ def _stack_doctor(json_output: bool) -> None:
     consistency: dict[object, object] = consistency_raw if isinstance(consistency_raw, dict) else {}
     if not consistency.get("ok"):
         console.print(f"\nDependency issue: {redact_text(str(consistency.get('error')))}")
+    for section in ("docker", "node", "github_auth"):
+        extra = report.get(section)
+        if isinstance(extra, dict):
+            status = extra.get("status", extra.get("verdict", ""))
+            detail = extra.get("detail", "")
+            console.print(f"\n{section}: {status} - {redact_text(str(detail))}")
+    path_info = report.get("path")
+    if isinstance(path_info, dict):
+        console.print(f"\npath: {path_info.get('bin')} on PATH: {path_info.get('on_path')}")
+    resources = report.get("resources")
+    if isinstance(resources, dict):
+        console.print(
+            f"\nresources: CPU {resources.get('cpu')} RAM {resources.get('ram_mib')} MiB "
+            f"swap {resources.get('swap_mib')} MiB disk-free {resources.get('disk_free_mb')} MB "
+            f"({resources.get('level')})"
+        )
+        warnings_raw = resources.get("warnings")
+        if isinstance(warnings_raw, list):
+            for warning in warnings_raw:
+                console.print(f"  Note: {warning}")
+    path_fix = report.get("path_fix")
+    if isinstance(path_fix, list) and path_fix:
+        console.print("\nPATH fix: ~/.local/bin is not on PATH. Re-run setup with --fix-path (idempotent).")
     summary_raw = report.get("summary")
     summary: dict[object, object] = summary_raw if isinstance(summary_raw, dict) else {}
     parts = [f"{k}: {v}" for k, v in sorted(summary.items(), key=lambda kv: str(kv[0]))]

@@ -56,9 +56,21 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _candidate_state_paths(explicit: Path | None) -> list[Path]:
+    if explicit is not None:
+        return [explicit]
+    paths = [stack_home.state_file()]
+    legacy = stack_home.sklab_home() / "state.json"
+    if legacy != paths[0]:
+        paths.append(legacy)
+    return paths
+
+
 def load_state(path: Path | None = None) -> InstallerState:
-    location = path or stack_home.state_file()
-    if not location.exists():
+    for location in _candidate_state_paths(path):
+        if location.exists():
+            break
+    else:
         return InstallerState()
     try:
         raw = json.loads(location.read_text(encoding="utf-8"))
