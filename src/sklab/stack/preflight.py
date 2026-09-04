@@ -36,6 +36,9 @@ BUILD_ESSENTIAL_MARKER = "/usr/bin/gcc"
 
 # Conservative per-module disk estimate (repos + venv/node_modules + build).
 PER_MODULE_ESTIMATE_MB = 400
+# Trivial adapters (argv-only command, local link) need almost no disk.
+LIGHT_MODULE_ESTIMATE_MB = 10
+HEAVY_INSTALL_TYPES = ("git", "python", "node", "docker-compose")
 SETUP_BUFFER_MB = 1024
 
 
@@ -118,6 +121,11 @@ def resource_verdict(host: HostInfo) -> ResourceVerdict:
 
 def estimate_disk_mb(module_count: int) -> int:
     return module_count * PER_MODULE_ESTIMATE_MB + SETUP_BUFFER_MB
+
+
+def estimate_plan_mb(heavy_count: int, light_count: int = 0) -> int:
+    """Honest estimate: heavy installs (clone/venv/npm/docker) vs trivial ones."""
+    return heavy_count * PER_MODULE_ESTIMATE_MB + light_count * LIGHT_MODULE_ESTIMATE_MB + SETUP_BUFFER_MB
 
 
 def check_disk_ok(required_mb: int, *, path: str | None = None) -> tuple[bool, str]:

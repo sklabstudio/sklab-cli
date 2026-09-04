@@ -315,9 +315,13 @@ def run_setup(
     order, plan = plan_setup(registry, scope=scope)
 
     # Disk safety gate before any heavy work: abort before partial installation.
-    install_count = sum(1 for step in plan if step.action == "install")
-    if install_count:
-        required = preflight.estimate_disk_mb(install_count)
+    install_ids = [step.id for step in plan if step.action == "install"]
+    if install_ids:
+        heavy = sum(
+            1 for mid in install_ids
+            if scoped.modules[mid].manifest.install.type in preflight.HEAVY_INSTALL_TYPES
+        )
+        required = preflight.estimate_plan_mb(heavy, len(install_ids) - heavy)
         ok, detail = preflight.check_disk_ok(required, path=str(stack_home.repos_dir()))
         append_event(log, "disk_gate", {"required_mb": required, "detail": detail, "ok": ok})
         if not ok:
@@ -392,11 +396,21 @@ def run_setup(
         summary_counts["SKIPPED_INSTALLS"] = skipped_installs
     failed = sorted([mid for mid, h in health_map.items() if h.status in ("FAILED", "DEGRADED")])
     auth_pending = sorted([mid for mid, h in health_map.items() if h.status == "AUTH_REQUIRED"])
+    # Adapter claimed success but post-install health disagrees: never fake READY, flag for resume.
+    mismatched = sorted([
+        mid for mid, h in health_map.items()
+        if h.status in ("NOT_INSTALLED", "UNKNOWN") and results.get(mid) is not None and results[mid].ok
+    ])
     resume_hint = ""
-    if failed or auth_pending:
+    if failed or auth_pending or mismatched:
         parts = []
         if failed:
             parts.append(f"failed: {', '.join(failed)} - fix the cause and re-run 'sklab setup --all' to resume")
+        if mismatched:
+            parts.append(
+                f"unverified: {', '.join(mismatched)} - install reported success but health is not READY; "
+                "re-run 'sklab setup --all' to retry"
+            )
         if auth_pending:
             parts.append(f"auth required: {', '.join(auth_pending)} - 'gh auth login', then re-run")
         resume_hint = "; ".join(parts) + ". Successful modules are preserved and will be skipped."

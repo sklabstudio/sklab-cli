@@ -64,6 +64,20 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def _ample_disk_for_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hermetic disk gate: real free disk varies per machine.
+
+    Unit/integration tests must not depend on host free space; the gate's
+    abort behavior is covered by its dedicated test, which overrides this stub.
+    """
+    from sklab.stack import preflight as _preflight
+
+    monkeypatch.setattr(
+        _preflight, "check_disk_ok", lambda required_mb, path=None: (True, "test override: ample disk")
+    )
+
+
 @pytest.fixture()
 def starter_source() -> Path:
     return STARTER_FIXTURES

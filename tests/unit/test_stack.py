@@ -294,7 +294,8 @@ def test_setup_dry_run_makes_no_changes(
 
 
 def test_setup_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: Path) -> None:
-    registry = _isolated_registry(monkeypatch, tmp_path, ["degraded-health.yaml", "failed-health.yaml"])
+    # Fixture-only registry: hermetic (no real clones/builds); full-registry installs are proven live.
+    registry = _registry_from(["degraded-health.yaml", "failed-health.yaml"])
     state_path = Path(str(isolated_home)) / "state.json"
     first = run_setup(registry, scope="all", dry_run=False, state_path=state_path)
     second = run_setup(registry, scope="all", dry_run=False, state_path=state_path)
@@ -316,7 +317,7 @@ def test_setup_scope_public_excludes_private(
 def test_optional_unavailable_skipped_cleanly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: Path
 ) -> None:
-    registry = _isolated_registry(monkeypatch, tmp_path, ["optional-module.yaml"])
+    registry = _registry_from(["optional-module.yaml"])
     result = run_setup(registry, scope="all", dry_run=False,
                        state_path=Path(str(isolated_home)) / "s.json")
     assert result.health["optional-module"].status == "NOT_INSTALLED"
@@ -339,7 +340,7 @@ def test_stack_doctor_offline_no_paid_ai(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 def test_update_planning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: Path) -> None:
-    registry = _isolated_registry(monkeypatch, tmp_path, ["public-python.yaml"])
+    registry = _registry_from(["public-python.yaml"])
     state_path = Path(str(isolated_home)) / "state.json"
     plan = plan_update(registry, state_path=state_path)
     assert all(p["action"] == "install" for p in plan)

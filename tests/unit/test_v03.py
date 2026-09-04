@@ -15,7 +15,7 @@ from sklab.stack import home as stack_home
 from sklab.stack.adapters import safe_module_dir
 from sklab.stack.manifest import parse_manifest_yaml
 from sklab.stack.operations import DiskSafetyError, plan_setup, run_setup, stack_doctor
-from sklab.stack.registry import load_registry
+from sklab.stack.registry import Registry, load_registry
 from tests.conftest import STACK_FIXTURES
 
 
@@ -26,6 +26,7 @@ def _cmd_manifest(
     visibility: str = "public",
     health_exit: int | None = None,
     deps: list[str] | None = None,
+    url_env: str | None = None,
 ) -> str:
     health_cmd = (
         f'["python", "-c", "import sys; sys.exit({health_exit})"]'
@@ -35,10 +36,11 @@ def _cmd_manifest(
     deps_yaml = ""
     if deps:
         deps_yaml = "dependencies:\n" + "".join(f"  - {d}\n" for d in deps)
+    source = f"{{type: git, repository: sklabstudio/fixture{', url_env: ' + url_env if url_env else ''}}}"
     return (
         "schema_version: 1\n"
         f"id: {module_id}\nname: {module_id}\nversion: 0.1.0\nvisibility: {visibility}\n"
-        "source: {type: git, repository: sklabstudio/fixture}\n"
+        f"source: {source}\n"
         f"install: {{type: command, command: [\"python\", \"-c\", \"import sys; sys.exit({exit_code})\"]}}\n"
         f"health: {{command: {health_cmd}}}\n"
         f"{deps_yaml}"
@@ -50,6 +52,19 @@ def _write_manifest(modules_dir: Path, module_id: str, text: str) -> Path:
     target = modules_dir / f"{module_id}.yaml"
     target.write_text(text, encoding="utf-8")
     return target
+
+
+def _small_registry(files: dict[str, str]) -> Registry:
+    """In-memory registry from manifest texts only (no builtins): hermetic, no network."""
+    from sklab.stack.registry import LoadedManifest
+
+    registry = Registry()
+    for text in files.values():
+        manifest = parse_manifest_yaml(text)
+        registry.modules[manifest.id] = LoadedManifest(
+            manifest=manifest, origin="local", fingerprint=manifest.fingerprint()
+        )
+    return registry
 
 
 def _seed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, files: dict[str, str]) -> Path:
@@ -99,8 +114,7 @@ def test_adapter_dry_run_pure_for_all_types(isolated_home: Path) -> None:
 
 
 def test_second_run_no_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: Path) -> None:
-    _seed(monkeypatch, tmp_path, {"idem-a": _cmd_manifest("idem-a")})
-    registry = load_registry()
+    registry = _small_registry({"idem-a": _cmd_manifest("idem-a")})
     state_path = Path(str(isolated_home)) / "state.json"
     first = run_setup(registry, scope="all", dry_run=False, state_path=state_path)
     assert first.health["idem-a"].status == "READY"
@@ -116,18 +130,25 @@ def test_second_run_no_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, 
 
 
 def test_failed_step_resume(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: Path) -> None:
-    modules_dir = _seed(monkeypatch, tmp_path, {
-        "good": _cmd_manifest("good"),
-        "bad": _cmd_manifest("bad", exit_code=3, health_exit=2),
-    })
     state_path = Path(str(isolated_home)) / "state.json"
-    first = run_setup(load_registry(), scope="all", dry_run=False, state_path=state_path)
+    first = run_setup(
+        _small_registry({
+            "good": _cmd_manifest("good"),
+            "bad": _cmd_manifest("bad", exit_code=3, health_exit=2),
+        }),
+        scope="all", dry_run=False, state_path=state_path,
+    )
     assert first.health["good"].status == "READY"
     assert first.health["bad"].status == "FAILED"
     assert "bad" in first.resume_hint and "re-run" in first.resume_hint
     # Repair only the failed step; success must be preserved, not redone.
-    _write_manifest(modules_dir, "bad", _cmd_manifest("bad", exit_code=0, health_exit=0))
-    second = run_setup(load_registry(), scope="all", dry_run=False, state_path=state_path)
+    second = run_setup(
+        _small_registry({
+            "good": _cmd_manifest("good"),
+            "bad": _cmd_manifest("bad", exit_code=0, health_exit=0),
+        }),
+        scope="all", dry_run=False, state_path=state_path,
+    )
     assert second.health["good"].status == "READY"
     assert second.results["good"].status == "SKIPPED"
     assert second.health["bad"].status == "READY"
@@ -150,10 +171,11 @@ def test_disk_gate_aborts_before_mutation(
 def test_private_absent_public_install_succeeds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: Path
 ) -> None:
-    _seed(monkeypatch, tmp_path, {"pub": _cmd_manifest("pub")})
     monkeypatch.delenv("SKLAB_PRIVATE_MODULE_URL", raising=False)
-    result = run_setup(load_registry(), scope="all", dry_run=False,
-                       state_path=Path(str(isolated_home)) / "s.json")
+    result = run_setup(
+        _small_registry({"pub": _cmd_manifest("pub")}),
+        scope="all", dry_run=False, state_path=Path(str(isolated_home)) / "s.json",
+    )
     assert result.health["pub"].status == "READY"
     assert "AUTH_REQUIRED" not in result.summary
 
@@ -162,12 +184,13 @@ def test_private_present_with_auth_installs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: Path
 ) -> None:
     monkeypatch.setenv("SKLAB_PRIVATE_MODULE_URL", "https://example.com/private.git")
-    _seed(monkeypatch, tmp_path, {
-        "pub": _cmd_manifest("pub"),
-        "priv": _cmd_manifest("priv", visibility="private"),
-    })
-    result = run_setup(load_registry(), scope="all", dry_run=False,
-                       state_path=Path(str(isolated_home)) / "s.json")
+    result = run_setup(
+        _small_registry({
+            "pub": _cmd_manifest("pub"),
+            "priv": _cmd_manifest("priv", visibility="private", url_env="SKLAB_PRIVATE_MODULE_URL"),
+        }),
+        scope="all", dry_run=False, state_path=Path(str(isolated_home)) / "s.json",
+    )
     assert result.health["priv"].status == "READY"
     assert result.health["pub"].status == "READY"
 
@@ -176,20 +199,19 @@ def test_private_missing_auth_reports_auth_required(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: Path
 ) -> None:
     monkeypatch.delenv("SKLAB_PRIVATE_MODULE_URL", raising=False)
-    modules_dir = tmp_path / "md"
-    modules_dir.mkdir()
-    shutil.copy(STACK_FIXTURES / "private-local-module.yaml", modules_dir / "private-local-module.yaml")
-    shutil.copy(STACK_FIXTURES / "public-python.yaml", modules_dir / "public-python.yaml")
-    monkeypatch.setenv("SKLAB_MODULES_DIR", str(modules_dir))
-    registry = load_registry(modules_dir)
+    registry = _small_registry({
+        "public-python": (STACK_FIXTURES / "public-python.yaml").read_text(encoding="utf-8"),
+        "priv": _cmd_manifest("priv", visibility="private", url_env="SKLAB_PRIVATE_MODULE_URL",
+                              deps=["public-python"]),
+    })
     order, steps = plan_setup(registry, scope="all")
     auth_steps = [s for s in steps if s.action == "auth"]
-    assert any(s.id == "private-local-module" for s in auth_steps)
+    assert any(s.id == "priv" for s in auth_steps)
     result = run_setup(registry, scope="all", dry_run=False,
                        state_path=Path(str(isolated_home)) / "s.json")
-    assert result.health["private-local-module"].status == "AUTH_REQUIRED"
+    assert result.health["priv"].status == "AUTH_REQUIRED"
     # Public modules are unaffected.
-    assert "private-local-module" in result.resume_hint
+    assert "priv" in result.resume_hint
 
 
 # --- 19. security -------------------------------------------------------------------
@@ -424,6 +446,68 @@ def test_git_clone_idempotent_offline(tmp_path: Path, isolated_home: Path) -> No
     assert second.ok and second.changed is False
 
 
+def test_web_ui_build_calls_npm_in_subdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: Path
+) -> None:
+    """Full-stack web-ui layout (frontend + backend) with stubbed subprocess: no network, no npm."""
+    import sklab.stack.adapters as adapters_mod
+    from sklab.core.subprocess import CommandResult
+
+    repos = stack_home.repos_dir()
+    app = repos / "web-ui" / "frontend"
+    app.mkdir(parents=True)
+    (app / "package.json").write_text(
+        json.dumps({"name": "web-ui", "scripts": {"build": "next build"}}), encoding="utf-8"
+    )
+    backend = repos / "web-ui" / "backend"
+    backend.mkdir(parents=True)
+    (backend / "pyproject.toml").write_text("[project]\nname = 'web-backend'\n", encoding="utf-8")
+
+    calls: list[tuple[list[str], object]] = []
+
+    def fake_run(argv: list[str], *, cwd: object = None, timeout: float = 60.0) -> CommandResult:
+        calls.append((list(argv), cwd))
+        return CommandResult(argv=list(argv), returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(adapters_mod, "run_command", fake_run)
+    monkeypatch.setattr(
+        "sklab.stack.preflight.check_node",
+        lambda repo_dir=None: {"installed": "v20.0.0", "required": "", "verdict": "READY", "detail": "ok"},
+    )
+    # Stub venv backend install (no real venv in unit tests).
+    monkeypatch.setattr(
+        adapters_mod, "_pip_install_into_venv",
+        lambda manifest, target_dir, timeout=600.0: adapters_mod.AdapterResult(
+            module_id=manifest.id, ok=True, status="READY", message="venv stub",
+            steps=[[f"venv {target_dir}"]], changed=True,
+        ),
+    )
+    manifest = parse_manifest_yaml(
+        "schema_version: 1\nid: web-ui\nname: Web UI\nvisibility: public\n"
+        "source: {type: git, repository: sklabstudio/web-ui}\n"
+        "install: {type: node}\n"
+        "health: {command: [\"python\", \"--version\"]}\n"
+    )
+    # Bypass the clone: repo already present is NOT enough (no .git) -> stub checkout too.
+    monkeypatch.setattr(
+        adapters_mod, "_git_checkout",
+        lambda manifest, timeout=300.0: adapters_mod.AdapterResult(
+            module_id=manifest.id, ok=True, status="NO_CHANGE", message="already cloned",
+            steps=[], changed=False,
+        ),
+    )
+    result = adapters_mod.install_module(manifest, dry_run=False)
+    assert result.ok and result.status == "READY"
+    argv_list = [argv for argv, _cwd in calls]
+    assert ["npm", "install"] in argv_list or ["npm", "ci"] in argv_list
+    assert ["npm", "run", "build"] in argv_list
+    # npm ran inside the frontend subdir, not the repo root.
+    for argv, cwd in calls:
+        if argv[:2] == ["npm", "run"]:
+            assert Path(str(cwd)) == app
+    assert (stack_home.install_root() / "web-ui" / ".sklab-installed").exists()
+
+
 def test_doctor_includes_new_sections(isolated_home: Path) -> None:
     report = stack_doctor(load_registry())
     for key in ("base_deps", "path", "docker", "node", "github_auth", "resources"):
@@ -444,3 +528,65 @@ def test_setup_json_includes_log_and_host(
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert "host" in payload and "order" in payload
+
+
+def test_subdir_project_probing(tmp_path: Path) -> None:
+    from sklab.stack.adapters import _find_node_app, _find_python_project, _has_npm_script
+
+    repo = tmp_path / "repo"
+    (repo / "backend").mkdir(parents=True)
+    (repo / "frontend").mkdir(parents=True)
+    assert _find_python_project(repo) is None
+    assert _find_node_app(repo) is None
+    (repo / "backend" / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+    (repo / "frontend" / "package.json").write_text(
+        json.dumps({"scripts": {"build": "echo build"}}), encoding="utf-8"
+    )
+    assert _find_python_project(repo) == repo / "backend"
+    assert _find_node_app(repo) == repo / "frontend"
+    assert _has_npm_script(repo / "frontend", "build") is True
+    assert _has_npm_script(repo / "frontend", "deploy") is False
+    # Root-level projects win.
+    (repo / "pyproject.toml").write_text("[project]\nname = 'root'\n", encoding="utf-8")
+    (repo / "package.json").write_text(json.dumps({}), encoding="utf-8")
+    assert _find_python_project(repo) == repo
+    assert _find_node_app(repo) == repo
+
+
+def test_content_repo_python_fallback_writes_marker(tmp_path: Path, isolated_home: Path) -> None:
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    src = tmp_path / "content"
+    src.mkdir()
+    subprocess.run(["git", "init", str(src)], capture_output=True, check=False)  # noqa: S603
+    subprocess.run(["git", "-C", str(src), "config", "user.email", "t@t"], capture_output=True, check=False)  # noqa: S603
+    subprocess.run(["git", "-C", str(src), "config", "user.name", "t"], capture_output=True, check=False)  # noqa: S603
+    (src / "README.md").write_text("content only", encoding="utf-8")
+    subprocess.run(["git", "-C", str(src), "add", "."], capture_output=True, check=False)  # noqa: S603
+    subprocess.run(["git", "-C", str(src), "commit", "-m", "init"], capture_output=True, check=False)  # noqa: S603
+    manifest = parse_manifest_yaml(
+        "schema_version: 1\nid: contentmod\nname: Content\nvisibility: public\n"
+        f"source: {{type: git, url: {src.as_uri()}}}\n"
+        "install: {type: python}\n"
+        "health: {command: [\"python\", \"--version\"]}\n"
+    )
+    result = adapters.install_module(manifest, dry_run=False)
+    assert result.ok and result.status == "READY"
+    assert "content repo" in result.message
+
+
+def test_mismatch_resume_hint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: Path) -> None:
+    result = run_setup(
+        _small_registry({
+            # Install command succeeds but health binary never exists.
+            "ghost": (
+                "schema_version: 1\nid: ghost\nname: Ghost\nversion: 0.1.0\nvisibility: public\n"
+                "source: {type: git, repository: sklabstudio/fixture}\n"
+                "install: {type: command, command: [\"python\", \"-c\", \"import sys; sys.exit(0)\"]}\n"
+                "health: {command: [\"sklab-nonexistent-binary-xyz\", \"--version\"]}\n"
+            ),
+        }),
+        scope="all", dry_run=False, state_path=Path(str(isolated_home)) / "s.json",
+    )
+    assert result.health["ghost"].status == "NOT_INSTALLED"
+    assert "ghost" in result.resume_hint and "unverified" in result.resume_hint

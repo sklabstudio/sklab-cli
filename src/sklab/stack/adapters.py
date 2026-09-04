@@ -260,6 +260,8 @@ def _git_checkout(manifest: ModuleManifest, *, timeout: float) -> AdapterResult:
 
 
 def _install_python(manifest: ModuleManifest, *, timeout: float) -> AdapterResult:
+    checkout: AdapterResult | None = None
+    repo: Path | None = None
     if manifest.source.repository or manifest.source.type == "git":
         checkout = _git_checkout(manifest, timeout=min(timeout, GIT_TIMEOUT))
         if checkout.status == "AUTH_REQUIRED":
@@ -267,16 +269,21 @@ def _install_python(manifest: ModuleManifest, *, timeout: float) -> AdapterResul
         if not checkout.ok:
             return checkout
         repo = safe_module_dir(stack_home.repos_dir(), manifest.id)
-    else:
-        repo = None
     # Prefer pipx for CLI modules, else isolated venv, else user pip.
-    target_dir = repo if repo is not None and _looks_like_python_project(repo) else None
+    # Standard layouts put the project at the root or one level down (backend/, server/, api/).
+    target_dir = _find_python_project(repo) if repo is not None else None
     if target_dir is None:
         pkg = manifest.install.package or manifest.source.package
         if pkg:
             return _pip_install_package(manifest, pkg, timeout=timeout)
         if checkout is not None and checkout.ok:
-            return checkout
+            # Content repo (no Python project): the verified clone IS the install.
+            write_marker(manifest.id, manifest.version, extra=f"git {repo}")
+            return AdapterResult(
+                module_id=manifest.id, ok=True, status="READY",
+                message=f"Cloned '{manifest.id}' (content repo, nothing to build).",
+                steps=checkout.steps, changed=checkout.changed,
+            )
         return AdapterResult(
             module_id=manifest.id, ok=False, status="FAILED",
             message=f"No Python package source for '{manifest.id}'.", steps=[],
@@ -295,34 +302,57 @@ def _install_python(manifest: ModuleManifest, *, timeout: float) -> AdapterResul
         pipx_error = redact_text((result.stderr or result.stdout)[:300])
     else:
         pipx_error = "pipx not installed"
-    venv_dir = stack_home.venvs_dir() / manifest.id
-    if not (venv_dir / "bin" / "activate").exists() and not (venv_dir / "Scripts" / "activate.bat").exists():
-        created = run_command([sys.executable, "-m", "venv", str(venv_dir)], timeout=120.0)
-        if not created.ok:
-            return AdapterResult(
-                module_id=manifest.id, ok=False, status="FAILED",
-                message=f"venv creation failed for '{manifest.id}' "
-                f"({pipx_error}; {redact_text(created.stderr[:200])}).",
-                steps=[],
-            )
-    pip_bin = str(venv_dir / ("Scripts/pip.exe" if os.name == "nt" else "bin/pip"))
-    installed = run_command([pip_bin, "install", str(target_dir)], timeout=timeout)
-    if installed.ok:
-        write_marker(manifest.id, manifest.version, extra=f"venv {venv_dir}")
-        return AdapterResult(
-            module_id=manifest.id, ok=True, status="READY",
-            message=f"Installed '{manifest.id}' into isolated venv.",
-            steps=[[pip_bin, "install", str(target_dir)]], changed=True,
+    venv_result = _pip_install_into_venv(manifest, target_dir, timeout=timeout)
+    if not venv_result.ok and not venv_result.steps:
+        # Preserve the pipx context when venv creation itself failed.
+        venv_result.message = (
+            f"venv creation failed for '{manifest.id}' "
+            f"({pipx_error}; {venv_result.message})"
         )
-    return AdapterResult(
-        module_id=manifest.id, ok=False, status="FAILED",
-        message=f"pip install failed for '{manifest.id}': {redact_text((installed.stderr or installed.stdout)[:300])}.",
-        steps=[[pip_bin, "install", str(target_dir)]],
-    )
+    return venv_result
 
 
 def _looks_like_python_project(path: Path) -> bool:
     return ((path / "pyproject.toml").exists() or (path / "setup.py").exists() or (path / "setup.cfg").exists())
+
+
+def _find_python_project(repo: Path) -> Path | None:
+    """Root first, then one standard subdir level (backend/, server/, api/). Pure inspection."""
+    if _looks_like_python_project(repo):
+        return repo
+    for child in ("backend", "server", "api"):
+        candidate = repo / child
+        try:
+            if candidate.is_dir() and _looks_like_python_project(candidate):
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def _find_node_app(repo: Path) -> Path | None:
+    """Root first, then one standard subdir level (frontend/, client/, app/, web/). Pure inspection."""
+    if (repo / "package.json").is_file():
+        return repo
+    for child in ("frontend", "client", "app", "web"):
+        candidate = repo / child / "package.json"
+        try:
+            if candidate.is_file():
+                return candidate.parent
+        except OSError:
+            continue
+    return None
+
+
+def _has_npm_script(app_dir: Path, script: str) -> bool:
+    import json as _json
+
+    try:
+        data = _json.loads((app_dir / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    scripts = data.get("scripts")
+    return isinstance(scripts, dict) and script in scripts
 
 
 def _pip_install_package(manifest: ModuleManifest, package: str, *, timeout: float) -> AdapterResult:
@@ -378,12 +408,13 @@ def _install_node(manifest: ModuleManifest, *, timeout: float) -> AdapterResult:
             message=f"No Node package source for '{manifest.id}'.", steps=[],
         )
     # Real frontend install: npm ci (or install) + build when defined. Sequential, no parallelism.
-    if not (repo_dir / "package.json").exists():
+    app_dir = _find_node_app(repo_dir)
+    if app_dir is None:
         write_marker(manifest.id, manifest.version, extra=f"git {repo_dir}")
         return checkout
-    lock = repo_dir / "package-lock.json"
+    lock = app_dir / "package-lock.json"
     install_argv = ["npm", "ci"] if lock.exists() else ["npm", "install"]
-    installed = run_command(install_argv, cwd=repo_dir, timeout=timeout)
+    installed = run_command(install_argv, cwd=app_dir, timeout=timeout)
     if not installed.ok:
         return AdapterResult(
             module_id=manifest.id, ok=False, status="FAILED",
@@ -391,25 +422,68 @@ def _install_node(manifest: ModuleManifest, *, timeout: float) -> AdapterResult:
             f"{redact_text((installed.stderr or installed.stdout)[:300])}.",
             steps=[install_argv],
         )
-    build_argv = ["npm", "run", "build"]
-    built = run_command(build_argv, cwd=repo_dir, timeout=timeout)
-    if not built.ok:
-        # Build failure still leaves dependencies installed; report honestly.
-        write_marker(manifest.id, manifest.version, extra=f"npm-install-only {repo_dir}")
-        return AdapterResult(
-            module_id=manifest.id, ok=False, status="FAILED",
-            message=f"npm build failed for '{manifest.id}': {redact_text((built.stderr or built.stdout)[:300])}. "
-            "Dependencies installed; fix the build and re-run setup to resume.",
-            steps=[install_argv, build_argv],
-        )
-    write_marker(manifest.id, manifest.version, extra=f"npm {repo_dir}")
+    steps = [install_argv]
+    backend_dir = _find_python_project(repo_dir)
+    if backend_dir is not None and backend_dir != app_dir:
+        backend_result = _pip_install_into_venv(manifest, backend_dir, timeout=timeout)
+        steps.extend(backend_result.steps)
+        if not backend_result.ok:
+            return AdapterResult(
+                module_id=manifest.id, ok=False, status="FAILED",
+                message=f"Backend install failed for '{manifest.id}': {backend_result.message} "
+                "Fix it and re-run setup to resume.",
+                steps=steps,
+            )
+    if _has_npm_script(app_dir, "build"):
+        build_argv = ["npm", "run", "build"]
+        built = run_command(build_argv, cwd=app_dir, timeout=timeout)
+        steps.append(build_argv)
+        if not built.ok:
+            # Build failure still leaves dependencies installed; report honestly.
+            write_marker(manifest.id, manifest.version, extra=f"npm-install-only {app_dir}")
+            return AdapterResult(
+                module_id=manifest.id, ok=False, status="FAILED",
+                message=f"npm build failed for '{manifest.id}': "
+                f"{redact_text((built.stderr or built.stdout)[:300])}. "
+                "Dependencies installed; fix the build and re-run setup to resume.",
+                steps=steps,
+            )
+    write_marker(manifest.id, manifest.version, extra=f"npm {app_dir}")
     warning = ""
     if node_info["verdict"] == "DEGRADED":
         warning = f" Note: {node_info['detail']}"
     return AdapterResult(
         module_id=manifest.id, ok=True, status="READY",
         message=f"Node dependencies + build done for '{manifest.id}'.{warning}",
-        steps=[install_argv, build_argv], changed=True,
+        steps=steps, changed=True,
+    )
+
+
+def _pip_install_into_venv(manifest: ModuleManifest, target_dir: Path, *, timeout: float) -> AdapterResult:
+    """Install a project dir into an isolated per-module venv. No sudo, no system pip."""
+    venv_dir = stack_home.venvs_dir() / manifest.id
+    if not (venv_dir / "bin" / "activate").exists() and not (venv_dir / "Scripts" / "activate.bat").exists():
+        created = run_command([sys.executable, "-m", "venv", str(venv_dir)], timeout=120.0)
+        if not created.ok:
+            return AdapterResult(
+                module_id=manifest.id, ok=False, status="FAILED",
+                message=f"venv creation failed for '{manifest.id}': {redact_text(created.stderr[:200])}.",
+                steps=[],
+            )
+    pip_bin = str(venv_dir / ("Scripts/pip.exe" if os.name == "nt" else "bin/pip"))
+    install_argv = [pip_bin, "install", str(target_dir)]
+    installed = run_command(install_argv, timeout=timeout)
+    if installed.ok:
+        write_marker(manifest.id, manifest.version, extra=f"venv {venv_dir}")
+        return AdapterResult(
+            module_id=manifest.id, ok=True, status="READY",
+            message=f"Installed '{manifest.id}' into isolated venv.",
+            steps=[install_argv], changed=True,
+        )
+    return AdapterResult(
+        module_id=manifest.id, ok=False, status="FAILED",
+        message=f"pip install failed for '{manifest.id}': {redact_text((installed.stderr or installed.stdout)[:300])}.",
+        steps=[install_argv],
     )
 
 
