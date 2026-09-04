@@ -290,12 +290,17 @@ def _install_python(manifest: ModuleManifest, *, timeout: float) -> AdapterResul
         )
     pipx = shutil.which("pipx")
     if pipx:
-        result = run_command([pipx, "install", str(target_dir)], timeout=timeout)
+        # NOTE: bare `pipx install` exits 0 without touching an existing venv
+        # ("already seems to be installed"), which once left stale module code
+        # in place while setup reported success. --force recreates the venv
+        # from the current source on every run (idempotent, just slower).
+        pipx_argv = [pipx, "install", "--force", str(target_dir)]
+        result = run_command(pipx_argv, timeout=timeout)
         if result.ok:
             write_marker(manifest.id, manifest.version, extra=f"pipx {target_dir}")
             return AdapterResult(
                 module_id=manifest.id, ok=True, status="READY",
-                message=f"pipx installed '{manifest.id}'.", steps=[[pipx, "install", str(target_dir)]],
+                message=f"pipx installed '{manifest.id}'.", steps=[pipx_argv],
                 changed=True,
             )
         # Fall through to venv on pipx failure (honest message preserved).
@@ -471,7 +476,10 @@ def _pip_install_into_venv(manifest: ModuleManifest, target_dir: Path, *, timeou
                 steps=[],
             )
     pip_bin = str(venv_dir / ("Scripts/pip.exe" if os.name == "nt" else "bin/pip"))
-    install_argv = [pip_bin, "install", str(target_dir)]
+    # NOTE: plain `pip install <dir>` is a same-version no-op ("already
+    # satisfied") that would leave stale code behind while reporting success.
+    # --force-reinstall guarantees the venv matches the current source.
+    install_argv = [pip_bin, "install", "--force-reinstall", str(target_dir)]
     installed = run_command(install_argv, timeout=timeout)
     if installed.ok:
         write_marker(manifest.id, manifest.version, extra=f"venv {venv_dir}")
