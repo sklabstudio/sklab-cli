@@ -103,6 +103,7 @@ def test_builtin_registry_public_only() -> None:
     dep_ids = [d.id for d in registry.modules["orchestrator"].manifest.dependencies]
     assert "agent-adapters" in dep_ids
     assert "provider-connections" in dep_ids
+    assert registry.modules["web-ui"].manifest.version == "0.3.0"
 
 
 def test_builtin_has_no_private_urls() -> None:

@@ -73,7 +73,7 @@ def builtin_descriptors() -> list[dict[str, Any]]:
                 dependencies=["agent-adapters", "provider-connections"],
                 health=["sklab-run", "doctor", "--json"]),
         _public("web-ui", "Web UI", repository="sklabstudio/web-ui",
-                capabilities=["web-ui"], install_type="node", version="0.2.0"),
+                 capabilities=["web-ui"], install_type="node", version="0.3.0"),
         _public("skill-hub", "Skill Hub", repository="sklabstudio/skill-hub",
                 capabilities=["skills"], health=["sklab-skills", "--version"]),
         _public("cyber-pack", "Cyber Pack", repository="sklabstudio/cyber-pack",
