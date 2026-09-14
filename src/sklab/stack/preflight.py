@@ -217,8 +217,16 @@ def apply_path_fix() -> dict[str, object]:
 
 def detect_base_deps() -> list[dict[str, str]]:
     results: list[dict[str, str]] = []
+    windows = platform.system() == "Windows"
     for name, argv, apt in APT_DEPS:
-        result = run_command(list(argv), timeout=10.0)
+        if windows and name == "jq":
+            results.append({"name": name, "available": "n/a", "version": "optional on Windows", "apt": apt})
+            continue
+        if windows and name == "unzip":
+            results.append({"name": name, "available": "yes", "version": "PowerShell Expand-Archive", "apt": apt})
+            continue
+        probe = [sys.executable, "--version"] if windows and name == "python3" else list(argv)
+        result = run_command(probe, timeout=10.0)
         if result.ok:
             if result.stdout.strip():
                 first = result.stdout.strip().splitlines()[0]
@@ -233,12 +241,16 @@ def detect_base_deps() -> list[dict[str, str]]:
             results.append({"name": name, "available": "no", "version": "", "apt": apt})
     # ca-certificates / build-essential are file-based on Debian/Ubuntu.
     results.append({
-        "name": "ca-certificates", "available": "yes" if Path(CA_CERTS_MARKER).exists() else "no",
-        "version": "", "apt": "ca-certificates",
+        "name": "ca-certificates",
+        "available": "n/a" if windows else ("yes" if Path(CA_CERTS_MARKER).exists() else "no"),
+        "version": "Windows trust store" if windows else "",
+        "apt": "ca-certificates",
     })
     results.append({
-        "name": "build-essential", "available": "yes" if Path(BUILD_ESSENTIAL_MARKER).exists() else "no",
-        "version": "", "apt": "build-essential",
+        "name": "build-essential",
+        "available": "n/a" if windows else ("yes" if Path(BUILD_ESSENTIAL_MARKER).exists() else "no"),
+        "version": "not a Windows package" if windows else "",
+        "apt": "build-essential",
     })
     results.append({
         "name": "python3-venv", "available": "yes" if _have_pyvenv() else "no",

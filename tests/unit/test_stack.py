@@ -100,9 +100,17 @@ def test_builtin_registry_public_only() -> None:
         assert loaded.origin == "builtin"
     # Spot-check capabilities + dependency example from the spec.
     assert "orchestration" in registry.modules["orchestrator"].manifest.capabilities
+    assert registry.modules["apivouch"].manifest.capabilities == ["verification"]
+    assert registry.modules["apivouch"].manifest.install.type == "docker-compose"
     dep_ids = [d.id for d in registry.modules["orchestrator"].manifest.dependencies]
-    assert "agent-adapters" in dep_ids
-    assert "provider-connections" in dep_ids
+    assert dep_ids == [
+        "repo-context",
+        "agent-adapters",
+        "provider-connections",
+        "reprobox",
+        "patchbench",
+        "skill-hub",
+    ]
     assert registry.modules["web-ui"].manifest.version == "0.3.0"
 
 

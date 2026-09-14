@@ -113,7 +113,7 @@ def _maybe_report_prereqs(*, json_output: bool) -> None:
     if json_output:
         return
     deps = preflight.detect_base_deps()
-    missing = [d["name"] for d in deps if d["available"] != "yes" and d["name"] not in ("gh",)]
+    missing = [d["name"] for d in deps if d["available"] == "no" and d["name"] not in ("gh",)]
     if not missing:
         return
     console = output.get_console()
